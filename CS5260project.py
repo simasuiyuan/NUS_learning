@@ -26,7 +26,7 @@ with open('./data/vaild_dataset.json', 'r') as outfile:
   product_info = pd.read_json(json.load(outfile), orient="records")
   
 product_info["file_loc"] = product_info["file_name"].apply(lambda file_name : IMAGE_PATH/file_name)
-product_info
+product_info = product_info.explode("description").where(product_info["description"].str.len()>5).dropna().reset_index(drop=True)
 
 product_info.head()
 # %%
@@ -66,7 +66,7 @@ transform_train = transforms.Compose([
 ])
 
 # Set the minimum word count threshold.
-vocab_threshold = 5
+vocab_threshold = 10
 
 mode = "train"
 
@@ -341,9 +341,12 @@ print_every = 100          # determines window for printing average loss
 log_train = './logs/training_log.txt'       # name of files with saved training loss and perplexity
 log_val = './logs/validation_log.txt'
 bleu = './logs/bleu.txt'
+
 # %%
-train_df, test_df = train_test_split(product_info, test_size=0.2)
+train_df, val_test_df = train_test_split(product_info, test_size=0.4)
 train_df.reset_index(drop=True,inplace=True)
+valid_df, test_df = train_test_split(val_test_df, test_size=0.5)
+valid_df.reset_index(drop=True,inplace=True)
 test_df.reset_index(drop=True,inplace=True)
 
 
@@ -386,7 +389,7 @@ transform_test = transforms.Compose([
 
 # Create the data loader.
 
-valid_data_loader = get_loader(test_df,
+valid_data_loader = get_loader(valid_df,
                                transform=transform_test,
                                mode='valid',
                                image_type="file_loc",
@@ -459,11 +462,13 @@ best_bleu = 0.
 for epoch in range(0, num_epochs+1):
     # Decay learning rate if there is no improvement for 8 consecutive epochs, and terminate training after 20
     if epochs_since_improvement == 50:
+        torch.save(decoder.state_dict(), os.path.join(f'/etlstage/PEE_joint/mine/models_new/{current_time}', 'decoder-%d.pkl' % epoch))
+        torch.save(encoder.state_dict(), os.path.join(f'/etlstage/PEE_joint/mine/models_new/{current_time}', 'encoder-%d.pkl' % epoch))
         break
-    # if epochs_since_improvement > 0 and epochs_since_improvement % 20 == 0:
-    #     adjust_learning_rate(decoder_optimizer, 0.8)
-    #     if fine_tune_encoder:
-    #         adjust_learning_rate(encoder_optimizer, 0.8)
+    if epochs_since_improvement > 0 and epochs_since_improvement % 20 == 0:
+        adjust_learning_rate(decoder_optimizer, 0.8)
+        if fine_tune_encoder:
+            adjust_learning_rate(encoder_optimizer, 0.8)
 
     train(epoch, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, total_step, num_epochs =num_epochs,
           data_loader = data_loader,
@@ -475,8 +480,8 @@ for epoch in range(0, num_epochs+1):
                                              num_epochs = num_epochs, 
                                              data_loader = valid_data_loader, write_file=file_val, bleu_score_file=bleu_score_file)
     
-    encoder_lr_scheduler.step()
-    decoder_lr_scheduler.step()
+    # encoder_lr_scheduler.step()
+    # decoder_lr_scheduler.step()
     
     # Check if there was an improvement
     is_best = sum(bleus)/4 > best_bleu
@@ -512,16 +517,16 @@ test_data_loader = get_loader(test_df,
                               batch_size=1,
                               mode='test')
 # %%
-current_time = "2022-03-30-21-43-54"
-encoder_file = 'encoder-26.pkl' 
-decoder_file = 'decoder-26.pkl'
+current_time = "2022-03-30-23-04-37"
+encoder_file = 'encoder-36.pkl' 
+decoder_file = 'decoder-36.pkl'
 
 embed_size = 125           # dimensionality of image and word embeddings
 hidden_size = 512          # number of features in hidden state of the RNN decoder
 num_features = 2048        # number of feature maps, produced by Encoder
 
 # The size of the vocabulary.
-vocab_size = len(test_data_loader.dataset.vocab)
+vocab_size = 84#len(test_data_loader.dataset.vocab)
 
 # Initialize the encoder and decoder, and set each to inference mode.
 encoder = EncoderCNN()
