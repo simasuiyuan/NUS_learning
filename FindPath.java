@@ -172,19 +172,115 @@ public class FindPath {
         return extractStringPath(sqlContext, paths);
     }
 
-    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, String from_node, String to_node){
-        if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", to_node)).first().getLong(0)==0){
-            return null;
+    private static class Task{
+        private String src;
+        private String dst;
+        Task() {
+            setSrc(null);
+            setDst(null);
+        }
+        Task(String src, String dst){
+            setSrc(src);
+            setDst(dst);
+        }
+        public String getDst() {
+            return dst;
+        }
+        public String getSrc() {
+            return src;
+        }
+        public void setSrc(String src){
+            this.src=src;
+        }
+        public void setDst(String dst) {
+            this.dst = dst;
+        }
+    }
+
+//    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, String from_node, String to_node){
+//        if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", to_node)).first().getLong(0)==0){
+//            return null;
+//        }
+//
+//        Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
+//                g.vertices().withColumn("visited", lit(false))
+//                        .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
+//                        .withColumn("path", lit("")));
+//        Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
+//        GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
+//
+////        g_Dijkstra.vertices().show();
+//        for(int i=1; i < g_Dijkstra.vertices().count() - 1; i++){//
+//            Row current_node = g_Dijkstra.vertices().where("visited = false").sort("total_distance").first();
+//            Long current_node_id = current_node.getLong(current_node.fieldIndex("id"));
+//
+//            Column msg_distance = Pregel.src("total_distance").plus(Pregel.edge("distance"));
+//            Column msg_path = when(Pregel.src("id").cast(DataTypes.StringType).equalTo(from_node), Pregel.src("id").cast(DataTypes.StringType))
+//                    .otherwise(callUDF("addPath", Pregel.src("path"), Pregel.src("id")));
+//            Column msg_for_dst = when(Pregel.src("id").equalTo(current_node_id), struct(msg_distance, msg_path));
+//
+//            Dataset<Row> new_distances = g_Dijkstra.aggregateMessages().sendToDst(msg_for_dst).agg(min(AggregateMessages.msg()).alias("aggMsg"));
+//
+//            Dataset<Row> combined_vertices = g_Dijkstra.vertices().join(new_distances,
+//                    g_Dijkstra.vertices().col("id").equalTo(new_distances.col("id")), "left_outer").drop(new_distances.col("id"));
+//
+//            Column new_visited_col = when(g_Dijkstra.vertices().col("visited")
+//                            .or(g_Dijkstra.vertices().col("id").equalTo(current_node_id)),
+//                    true).otherwise(false);
+//            Column new_distance_col = when(new_distances.col("aggMsg").isNotNull()
+//                            .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
+//                    new_distances.col("aggMsg").getItem("col1")).otherwise(g_Dijkstra.vertices().col("total_distance"));
+//            Column new_path_col = when(new_distances.col("aggMsg").isNotNull()
+//                            .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
+//                    new_distances.col("aggMsg").getItem("col2").cast("string")).otherwise(g_Dijkstra.vertices().col("path"));
+//
+//            Dataset<Row> new_vertices = combined_vertices
+//                    .withColumn("visited", new_visited_col)
+//                    .withColumn("new_total_distance",new_distance_col)
+//                    .withColumn("newPath",new_path_col)
+//                    .drop("aggMsg", "total_distance", "path", "latitude", "longitude")
+//                    .withColumnRenamed("new_total_distance", "total_distance")
+//                    .withColumnRenamed("newPath", "path");
+//
+//            Dataset<Row> new_vertices_cached = AggregateMessages.getCachedDataFrame(new_vertices);
+//            g_Dijkstra = GraphFrame.apply(new_vertices_cached, g_Dijkstra.edges());
+//
+//            Row top_vertex = g_Dijkstra.vertices().where(g_Dijkstra.vertices().col("id").equalTo(to_node)).first();
+//
+//            if(top_vertex.getBoolean(top_vertex.fieldIndex("visited"))){
+//                Dataset<Row> resultDF = g_Dijkstra.vertices().where(g_Dijkstra.vertices().col("id").equalTo(to_node));
+//                resultDF = resultDF.withColumn("newPath", callUDF("addPath",resultDF.col("path"), resultDF.col("id")))
+//                        .drop("visited", "path")
+//                        .withColumnRenamed("newPath", "path");
+//                return resultDF.select("path").first().getString(0);
+//            }
+//        }
+//
+//        return null;
+//    }
+    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, List<Task> tasks){
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < tasks.size(); i ++){
+            if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", tasks.get(i).getDst())).first().getLong(0)==0){
+                result.add("");
+                tasks.remove(i);
+            }
+        }
+        List<GraphFrame> taskGraphs = new ArrayList<>();
+        for (int i = 0; i < tasks.size(); i ++){
+            Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
+                    g.vertices().withColumn("visited", lit(false))
+                            .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
+                            .withColumn("path", lit("")));
+            Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
+            GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
+        }
+        while(!tasks.isEmpty()){
+
         }
 
-        Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
-                g.vertices().withColumn("visited", lit(false))
-                        .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
-                        .withColumn("path", lit("")));
-        Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
-        GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
 
-//        g_Dijkstra.vertices().show();
+    //        g_Dijkstra.vertices().show();
         for(int i=1; i < g_Dijkstra.vertices().count() - 1; i++){//
             Row current_node = g_Dijkstra.vertices().where("visited = false").sort("total_distance").first();
             Long current_node_id = current_node.getLong(current_node.fieldIndex("id"));
@@ -200,7 +296,7 @@ public class FindPath {
                     g_Dijkstra.vertices().col("id").equalTo(new_distances.col("id")), "left_outer").drop(new_distances.col("id"));
 
             Column new_visited_col = when(g_Dijkstra.vertices().col("visited")
-                    .or(g_Dijkstra.vertices().col("id").equalTo(current_node_id)),
+                            .or(g_Dijkstra.vertices().col("id").equalTo(current_node_id)),
                     true).otherwise(false);
             Column new_distance_col = when(new_distances.col("aggMsg").isNotNull()
                             .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
@@ -233,7 +329,6 @@ public class FindPath {
 
         return null;
     }
-
     private static class RunTimeReport implements Serializable {
         private static final String BOUNDARY_LINE = "========================================\n";
         private String Report = "\n"+BOUNDARY_LINE+"CS5424 Assignment 2 Runtime report\n"+BOUNDARY_LINE;
@@ -332,6 +427,7 @@ public class FindPath {
         List<String> all_results = new ArrayList<String>();
 //        Scanner input_tasks = new Scanner(new FileInputStream(input_src_dst_file));
         BufferedReader input_tasks=new BufferedReader(new InputStreamReader(fs.open(new Path(input_src_dst_file))));
+        List<Task> tasks = new ArrayList<>();
         String task_line = input_tasks.readLine();
         while(task_line != null){
             String[] task = task_line.split(" ");
@@ -346,6 +442,7 @@ public class FindPath {
 
             /*Dijkstra*/
             run_time_report.addInfo(String.format("Dijkstra Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
+            tasks.add(new Task(task[0], task[1]));
             String SSSP_Dijkstra = getShortestPathsFromDijkstra(sqlContext, g, task[0], task[1]);
 
             //check run time for task
@@ -374,6 +471,10 @@ public class FindPath {
 
         run_time_report.addInfo("Job done overall", true);
         run_time_report.printReport();
+        for(Task tsk:tasks){
+            System.out.println(tsk.getSrc());
+            System.out.println(tsk.getDst());
+        }
 
     }
 }
