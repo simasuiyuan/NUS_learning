@@ -2,10 +2,12 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.sql.*;
 import org.apache.spark.sql.api.java.UDF1;
 import org.apache.spark.sql.api.java.UDF2;
 import org.apache.spark.sql.api.java.UDF4;
+import org.apache.spark.sql.expressions.Window;
 import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
@@ -19,7 +21,10 @@ import scala.collection.mutable.WrappedArray;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.apache.spark.sql.functions.*;
 
@@ -127,8 +132,7 @@ public class FindPath {
                 .withColumnRenamed("rev_src", "source")
                 .withColumnRenamed("rev_dest", "destination")
                 .select("road_id", "source", "destination", "distance", "oneway");
-        Dataset<Row> full_relation = forward_relation.union(reversed_relation).where("source IS NOT NULL");
-
+        Dataset<Row> full_relation = forward_relation.union(reversed_relation).where("source IS NOT NULL").repartition(col("source"));
         if(!createTempViewName.isEmpty()) full_relation.createOrReplaceTempView(createTempViewName);
         return full_relation;
     }
@@ -197,113 +201,87 @@ public class FindPath {
         }
     }
 
-//    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, String from_node, String to_node){
-//        if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", to_node)).first().getLong(0)==0){
-//            return null;
-//        }
-//
-//        Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
-//                g.vertices().withColumn("visited", lit(false))
-//                        .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
-//                        .withColumn("path", lit("")));
-//        Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
-//        GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
-//
-////        g_Dijkstra.vertices().show();
-//        for(int i=1; i < g_Dijkstra.vertices().count() - 1; i++){//
-//            Row current_node = g_Dijkstra.vertices().where("visited = false").sort("total_distance").first();
-//            Long current_node_id = current_node.getLong(current_node.fieldIndex("id"));
-//
-//            Column msg_distance = Pregel.src("total_distance").plus(Pregel.edge("distance"));
-//            Column msg_path = when(Pregel.src("id").cast(DataTypes.StringType).equalTo(from_node), Pregel.src("id").cast(DataTypes.StringType))
-//                    .otherwise(callUDF("addPath", Pregel.src("path"), Pregel.src("id")));
-//            Column msg_for_dst = when(Pregel.src("id").equalTo(current_node_id), struct(msg_distance, msg_path));
-//
-//            Dataset<Row> new_distances = g_Dijkstra.aggregateMessages().sendToDst(msg_for_dst).agg(min(AggregateMessages.msg()).alias("aggMsg"));
-//
-//            Dataset<Row> combined_vertices = g_Dijkstra.vertices().join(new_distances,
-//                    g_Dijkstra.vertices().col("id").equalTo(new_distances.col("id")), "left_outer").drop(new_distances.col("id"));
-//
-//            Column new_visited_col = when(g_Dijkstra.vertices().col("visited")
-//                            .or(g_Dijkstra.vertices().col("id").equalTo(current_node_id)),
-//                    true).otherwise(false);
-//            Column new_distance_col = when(new_distances.col("aggMsg").isNotNull()
-//                            .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
-//                    new_distances.col("aggMsg").getItem("col1")).otherwise(g_Dijkstra.vertices().col("total_distance"));
-//            Column new_path_col = when(new_distances.col("aggMsg").isNotNull()
-//                            .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
-//                    new_distances.col("aggMsg").getItem("col2").cast("string")).otherwise(g_Dijkstra.vertices().col("path"));
-//
-//            Dataset<Row> new_vertices = combined_vertices
-//                    .withColumn("visited", new_visited_col)
-//                    .withColumn("new_total_distance",new_distance_col)
-//                    .withColumn("newPath",new_path_col)
-//                    .drop("aggMsg", "total_distance", "path", "latitude", "longitude")
-//                    .withColumnRenamed("new_total_distance", "total_distance")
-//                    .withColumnRenamed("newPath", "path");
-//
-//            Dataset<Row> new_vertices_cached = AggregateMessages.getCachedDataFrame(new_vertices);
-//            g_Dijkstra = GraphFrame.apply(new_vertices_cached, g_Dijkstra.edges());
-//
-//            Row top_vertex = g_Dijkstra.vertices().where(g_Dijkstra.vertices().col("id").equalTo(to_node)).first();
-//
-//            if(top_vertex.getBoolean(top_vertex.fieldIndex("visited"))){
-//                Dataset<Row> resultDF = g_Dijkstra.vertices().where(g_Dijkstra.vertices().col("id").equalTo(to_node));
-//                resultDF = resultDF.withColumn("newPath", callUDF("addPath",resultDF.col("path"), resultDF.col("id")))
-//                        .drop("visited", "path")
-//                        .withColumnRenamed("newPath", "path");
-//                return resultDF.select("path").first().getString(0);
-//            }
-//        }
-//
-//        return null;
-//    }
-    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, List<Task> tasks){
-        List<String> result = new ArrayList<>();
-        for (int i = 0; i < tasks.size(); i ++){
-            if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", tasks.get(i).getDst())).first().getLong(0)==0){
-                result.add("");
-                tasks.remove(i);
+    private static String getShortestPathsFromDijkstraV2(SQLContext sqlContext, String from_node, String to_node, long noOfNodes){
+        if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", to_node)).first().getLong(0)==0){
+            return null;
+        }
+
+        Dataset<Row> candidate_paths = sqlContext.sql(
+                String.format(
+                        "SELECT source AS src, destination AS latest_node, distance AS total_distance, " +
+                                "addPath(CAST(source AS STRING), destination) AS path, " +
+                                "array(source, destination) AS visited " +
+                        "FROM relationDF WHERE (source=%s) AND (distance IS NOT NULL)", from_node));
+
+        candidate_paths.createOrReplaceTempView("candidatePaths");
+
+        long MAX_PATH = noOfNodes - 2;
+        for(int i=1; i < MAX_PATH; i++) {
+            if(!candidate_paths.where(String.format("latest_node = %s", to_node)).isEmpty()){
+                return candidate_paths.where(String.format("latest_node = %s", to_node)).select("path").first().getString(0);
             }
+            candidate_paths = sqlContext.sql(
+                    String.format(
+                            "SELECT C.src AS src, R.destination AS latest_node, " +
+                                    "(C.total_distance + R.distance) AS total_distance, " +
+                                    "array_union(C.visited, array(R.destination)) AS visited, " +
+                                    "addPath(C.path, R.destination) AS path " +
+                                    "FROM candidatePaths C " +
+                                    "LEFT JOIN relationDF R ON C.latest_node = R.source " +
+                                    "WHERE ((R.distance IS NOT NULL) AND (NOT array_contains(C.visited, R.destination)))"));
+            candidate_paths = candidate_paths.sort("total_distance");
+            candidate_paths.createOrReplaceTempView("candidatePaths");
         }
-        List<GraphFrame> taskGraphs = new ArrayList<>();
-        for (int i = 0; i < tasks.size(); i ++){
-            Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
-                    g.vertices().withColumn("visited", lit(false))
-                            .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
-                            .withColumn("path", lit("")));
-            Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
-            GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
+        return null;
+    }
+
+    // this is able to solve 5 cases provided, but not all extra
+    /*unsolvable cases:
+    5239881814 6977240310
+    1345143432 1854366392
+    1345143432 1832488252
+    1534829927 1832488252
+    5936493264 1345143432
+    */
+    private static String getShortestPathsFromDijkstra(SQLContext sqlContext, GraphFrame g, String from_node, String to_node){
+        if (sqlContext.sql(String.format("SELECT count(*) as count FROM nodeDF where nodeDF.node_id = %s", to_node)).first().getLong(0)==0){
+            return null;
         }
-        while(!tasks.isEmpty()){
 
-        }
+        Dataset<Row> vertices_cached = AggregateMessages.getCachedDataFrame(
+                g.vertices().withColumn("visited", lit(false))
+                        .withColumn("total_distance", when(g.vertices().col("id").equalTo(from_node), 0).otherwise(Double.POSITIVE_INFINITY))
+                        .withColumn("path", lit("")));
+        Dataset<Row> edges_cached = AggregateMessages.getCachedDataFrame(g.edges().where(g.edges().col("distance").isNotNull()));
+        GraphFrame g_Dijkstra = GraphFrame.apply(vertices_cached, edges_cached);
 
-
-    //        g_Dijkstra.vertices().show();
-        for(int i=1; i < g_Dijkstra.vertices().count() - 1; i++){//
+        long MAX_PATH = g_Dijkstra.vertices().count() - 1;
+        for(int i=1; i < MAX_PATH; i++){//
             Row current_node = g_Dijkstra.vertices().where("visited = false").sort("total_distance").first();
             Long current_node_id = current_node.getLong(current_node.fieldIndex("id"));
 
             Column msg_distance = Pregel.src("total_distance").plus(Pregel.edge("distance"));
+
             Column msg_path = when(Pregel.src("id").cast(DataTypes.StringType).equalTo(from_node), Pregel.src("id").cast(DataTypes.StringType))
                     .otherwise(callUDF("addPath", Pregel.src("path"), Pregel.src("id")));
+
             Column msg_for_dst = when(Pregel.src("id").equalTo(current_node_id), struct(msg_distance, msg_path));
 
             Dataset<Row> new_distances = g_Dijkstra.aggregateMessages().sendToDst(msg_for_dst).agg(min(AggregateMessages.msg()).alias("aggMsg"));
 
-            Dataset<Row> combined_vertices = g_Dijkstra.vertices().join(new_distances,
-                    g_Dijkstra.vertices().col("id").equalTo(new_distances.col("id")), "left_outer").drop(new_distances.col("id"));
-
             Column new_visited_col = when(g_Dijkstra.vertices().col("visited")
                             .or(g_Dijkstra.vertices().col("id").equalTo(current_node_id)),
                     true).otherwise(false);
+
             Column new_distance_col = when(new_distances.col("aggMsg").isNotNull()
                             .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
                     new_distances.col("aggMsg").getItem("col1")).otherwise(g_Dijkstra.vertices().col("total_distance"));
             Column new_path_col = when(new_distances.col("aggMsg").isNotNull()
-                            .and(new_distances.col("aggMsg").getItem("col1").$less(g_Dijkstra.vertices().col("total_distance"))),
+                            .and(new_distances.col("aggMsg").getItem("col1").$less(Double.POSITIVE_INFINITY)),
                     new_distances.col("aggMsg").getItem("col2").cast("string")).otherwise(g_Dijkstra.vertices().col("path"));
+
+            Dataset<Row> combined_vertices = g_Dijkstra.vertices().join(new_distances,
+                    g_Dijkstra.vertices().col("id").equalTo(new_distances.col("id")), "left_outer").drop(new_distances.col("id"));
 
             Dataset<Row> new_vertices = combined_vertices
                     .withColumn("visited", new_visited_col)
@@ -323,12 +301,86 @@ public class FindPath {
                 resultDF = resultDF.withColumn("newPath", callUDF("addPath",resultDF.col("path"), resultDF.col("id")))
                         .drop("visited", "path")
                         .withColumnRenamed("newPath", "path");
+                g_Dijkstra.vertices().unpersist();
                 return resultDF.select("path").first().getString(0);
             }
         }
-
         return null;
     }
+
+    private static List<String> getShortestPathsFromDijkstraV3(SQLContext sqlContext, long noOfNodes, RunTimeReport run_time_report){
+        sqlContext.cacheTable("relationDF");
+        Dataset<Row> validTaskDF = sqlContext.sql(
+                "SELECT taskDF.taskId, taskDF.from_node, taskDF.to_node " +
+                        "FROM taskDF " +
+                        "where taskDF.to_node IN (SELECT node_id FROM nodeDF)");
+        validTaskDF.createOrReplaceTempView("taskDF");
+
+        Dataset<Row> candidate_paths = sqlContext.sql(
+                String.format(
+                        "SELECT T.taskId," +
+                                "R.source AS src, T.to_node, " +
+                                "R.destination AS latest_node, R.distance AS total_distance, " +
+                                "array(R.source, R.destination) AS visited, " +
+                                "addPath(CAST(R.source AS STRING), R.destination) AS path, " +
+                                "false AS found " +
+                                "FROM relationDF R, taskDF T WHERE (R.source=T.from_node) AND (R.distance IS NOT NULL)"));
+        Dataset<Row> resultDF = sqlContext.createDataFrame(new ArrayList<Row>(), candidate_paths.schema());
+        resultDF.createOrReplaceTempView("resultDF");
+        candidate_paths.createOrReplaceTempView("candidatePaths");
+//
+        long MIN_CHECK = 0;
+        long MAX_CANDIDATES = 2;
+        long MAX_PATH = 100;//20 mins = 1200 sec => 1200 sec / 100 = 12 / ;20 - 5 local - 1hr
+        for(int i=1; i < noOfNodes-2; i++) {
+//            candidate_paths = candidate_paths.withColumn("found", when(col("to_node").equalTo(col("latest_node")), true).otherwise(false));
+            if(candidate_paths.where("found=true").limit(1).count()>0){
+//                path_found.createOrReplaceTempView("pathFoundDF");
+                resultDF = resultDF.union(candidate_paths.where("found=true"));
+                resultDF.createOrReplaceTempView("resultDF");
+//                candidate_paths = sqlContext.sql(
+//                        String.format(
+//                                "SELECT * FROM candidatePaths " +
+//                                        "WHERE taskId NOT IN (" +
+//                                        "SELECT taskId FROM resultDF GROUP BY taskId HAVING count(*) >= %d)", MAX_CANDIDATES
+//                        )
+//                );
+//                candidate_paths.createOrReplaceTempView("candidatePaths");
+            }
+            long IsJobLeft = sqlContext.sql(
+                    "SELECT * FROM taskDF WHERE taskId NOT IN (SELECT taskId FROM resultDF) LIMIT 1"
+            ).count();
+            if(((i > MIN_CHECK) & (IsJobLeft==0)) | (i > MAX_PATH)){
+                run_time_report.addInfo(String.format("Number of iteration = %d", i), false);
+                break;
+            }
+            candidate_paths = sqlContext.sql(
+                    String.format(
+                            "SELECT /*+ BROADCASTJOIN(relationDF) */C.taskId AS taskId, C.src AS src, C.to_node AS to_node, " +
+                                    "R.destination AS latest_node, " +
+                                    "(C.total_distance + R.distance) AS total_distance, " +
+                                    "array_union(C.visited, array(R.destination)) AS visited, " +
+                                    "addPath(C.path, R.destination) AS path, " +
+                                    "CASE WHEN C.to_node=R.destination THEN true ELSE false END AS found " +
+                                    "FROM candidatePaths C " +
+                                    "LEFT JOIN relationDF R ON C.latest_node = R.source " +
+                                    "WHERE ((C.found=false) AND (R.distance IS NOT NULL) AND (NOT array_contains(C.visited, R.destination)))")).repartition(col("latest_node"));
+            candidate_paths.createOrReplaceTempView("candidatePaths");
+        }
+
+        List<String> all_results = resultDF
+                .withColumn("min_distance_row", row_number().over(Window.partitionBy("taskId").orderBy("total_distance")))
+                .where("min_distance_row = 1")
+                .select("path")
+                .map(new MapFunction<Row, String>() {
+                    @Override
+                    public String call(Row row) throws Exception {
+                        return row.getString(0);
+                    }
+                }, Encoders.STRING()).collectAsList();
+        return all_results;
+    }
+
     private static class RunTimeReport implements Serializable {
         private static final String BOUNDARY_LINE = "========================================\n";
         private String Report = "\n"+BOUNDARY_LINE+"CS5424 Assignment 2 Runtime report\n"+BOUNDARY_LINE;
@@ -389,14 +441,14 @@ public class FindPath {
     }
 
     /*Define global variables */
-    static boolean runOnCluster = false;
-    static SparkConf sparkConf = new SparkConf().setAppName("FindPath");
+    static boolean runOnCluster = true;
 
     public static void main(String[] args) throws IOException {
+        SparkConf sparkConf = new SparkConf().setAppName("FindPath");
         if (!runOnCluster) {
             sparkConf.setMaster("local[5]");
-            sparkConf.setJars(new String[] { "target/eduonix_spark-deploy.jar" });
-//            spark = SparkSession.builder().config(sparkConf).getOrCreate();
+        } else {
+            sparkConf.setMaster("local[10]").set("spark.executor.memory" ,"10g").set("spark.driver.memory", "12g");;
         }
         JavaSparkContext jsc = new JavaSparkContext(sparkConf);
         SQLContext sqlContext = new SQLContext(jsc);
@@ -405,6 +457,7 @@ public class FindPath {
         String result_adjmap_file = args[2];
         String result_path_file = args[3];
         FileSystem fs = FileSystem.get(jsc.hadoopConfiguration());
+        String file = null;
 
         new GraphFrame();
         RunTimeReport run_time_report = new RunTimeReport(System.currentTimeMillis());
@@ -414,67 +467,101 @@ public class FindPath {
         /* construct relation table */
         Dataset<Row> nodeDF = getNodeDF(sqlContext, raw_osm_file, "nodeDF");
         Dataset<Row> roadDF = getRoadDF(sqlContext, raw_osm_file, "roadDF");
-        Dataset<Row> relationDF = getRelationDF(sqlContext, "nodeDF", "roadDF","relationDF").cache();
+        Dataset<Row> relationDF = getRelationDF(sqlContext, "nodeDF", "roadDF","relationDF");
 
-        Dataset<Row> adjMapCollection = getAdjMapDf(sqlContext);
-        relationDF.persist();
-        run_time_report.addInfo("adjacency map constructed", true);
+//        Dataset<Row> adjMapCollection = getAdjMapDf(sqlContext);
+//        run_time_report.addInfo("adjacency map constructed", true);
+//
+//        /* output adjacency map to hdfs */
+//        adjMapCollection.select("output").coalesce(1).write().text("output");
+//        file = fs.globStatus(new Path(String.format("%s/part*", "output")))[0].getPath().getName();
+//        System.out.println(file);
+//        fs.rename(new Path(String.format("%s/%s", "output",file)), new Path(result_adjmap_file));
+
 
         GraphFrame g = GraphFrame
                 .apply(nodeDF.withColumnRenamed("node_id", "id"),
                         relationDF.withColumnRenamed("source", "src").withColumnRenamed("destination", "dst"));
 
+
+        String ALGORITHM = "DijkstraV3";
+        long noOfNodes = nodeDF.count();
         List<String> all_results = new ArrayList<String>();
-//        Scanner input_tasks = new Scanner(new FileInputStream(input_src_dst_file));
         BufferedReader input_tasks=new BufferedReader(new InputStreamReader(fs.open(new Path(input_src_dst_file))));
-        List<Task> tasks = new ArrayList<>();
         String task_line = input_tasks.readLine();
-        while(task_line != null){
-            String[] task = task_line.split(" ");
-//            /*BFS*/
-//            run_time_report.addInfo(String.format("BFS (no-weight) Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
-//            String result = getPathsFromBFS(sqlContext, g, task[0], task[1]);
-//
-//            //check run time for task
-//            run_time_report.addInfo(String.format("path found: %s", result), true);
 
-//            all_results.add(result);
-
-            /*Dijkstra*/
-            run_time_report.addInfo(String.format("Dijkstra Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
-            tasks.add(new Task(task[0], task[1]));
-            String SSSP_Dijkstra = getShortestPathsFromDijkstra(sqlContext, g, task[0], task[1]);
-
-            //check run time for task
-            run_time_report.addInfo(String.format("path found: %s", SSSP_Dijkstra), true);
-
-            all_results.add(SSSP_Dijkstra);
-            task_line = input_tasks.readLine();
+        switch (ALGORITHM) {
+            case "BFS":
+                /*BFS*/
+                sqlContext.cacheTable("relationDF");
+                while(task_line != null) {
+                    String[] task = task_line.split(" ");
+                    run_time_report.addInfo(String.format("BFS (no-weight) Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
+                    String BFS_result = getPathsFromBFS(sqlContext, g, task[0], task[1]);
+                    //check run time for task
+                    run_time_report.addInfo(String.format("path found: %s", BFS_result), true);
+                    all_results.add(BFS_result);
+                    task_line = input_tasks.readLine();
+                }
+                break;
+            case "Dijkstra":
+                /*Dijkstra*/
+                sqlContext.cacheTable("relationDF");
+                while(task_line != null) {
+                    String[] task = task_line.split(" ");
+                    run_time_report.addInfo(String.format("Dijkstra Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
+                    String SSSP_Dijkstra = getShortestPathsFromDijkstra(sqlContext, g, task[0], task[1]);
+                    //check run time for task
+                    run_time_report.addInfo(String.format("path found: %s", SSSP_Dijkstra), true);
+                    all_results.add(SSSP_Dijkstra);
+                    task_line = input_tasks.readLine();
+                }
+                break;
+            case "DijkstraV2":
+                /*Dijkstra V2*/
+                sqlContext.cacheTable("relationDF");
+                while(task_line != null) {
+                    String[] task = task_line.split(" ");
+                    run_time_report.addInfo(String.format("DijkstraV2 Processing task: \nsrc node: %s -> dst node: %s", task[0], task[1]), false);
+                    String SSSP_DijkstraV2 = getShortestPathsFromDijkstraV2(sqlContext, task[0], task[1], noOfNodes);
+                    //check run time for task
+                    run_time_report.addInfo(String.format("path found: %s", SSSP_DijkstraV2), true);
+                    all_results.add(SSSP_DijkstraV2);
+                    task_line = input_tasks.readLine();
+                }
+                break;
+            case "DijkstraV3":
+                run_time_report.addInfo(String.format("DijkstraV3 Processing all tasks:"), false);
+                Dataset<Row> taskDF = sqlContext.read()
+                        .text(input_src_dst_file)
+                        .withColumn("temp", split(col("value"), " "))
+                        .select(col("value").as("taskId"),
+                                col("temp").getItem(0).as("from_node"),
+                                col("temp").getItem(1).as("to_node"))
+                        .drop("temp");
+                taskDF.createOrReplaceTempView("taskDF");
+                all_results = getShortestPathsFromDijkstraV3(sqlContext, noOfNodes, run_time_report);
+                run_time_report.addInfo(String.format("path found: \n%s", String.join( "\n", all_results)), true);
+                break;
+            default:
+                fs.close();
+                jsc.stop();
+                System.out.println("no algorithm found");
+                System.exit(0);
         }
 
-//        /*test*/
-//        nodeDF.select("*").coalesce(1).write().text( "map_temp_out");
-        /* output adjacency map to hdfs */
-        adjMapCollection.select("output").coalesce(1).write().text("output");
-        String file = fs.globStatus(new Path(String.format("%s/part*", "output")))[0].getPath().getName();
-        System.out.println(file);
-        fs.rename(new Path(String.format("%s/%s", "output",file)), new Path(result_adjmap_file));
 
         sqlContext.createDataset(all_results, Encoders.STRING()).coalesce(1).write().text( "output2");
         file = fs.globStatus(new Path(String.format("%s/part*", "output2")))[0].getPath().getName();
         System.out.println(file);
         fs.rename(new Path(String.format("%s/%s", "output2",file)), new Path(result_path_file));
+        fs.delete(new Path("output2"), true);
 
         fs.close();
         jsc.stop();
 
-
         run_time_report.addInfo("Job done overall", true);
         run_time_report.printReport();
-        for(Task tsk:tasks){
-            System.out.println(tsk.getSrc());
-            System.out.println(tsk.getDst());
-        }
 
     }
 }
