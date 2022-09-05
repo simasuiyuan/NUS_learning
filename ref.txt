@@ -1,0 +1,28 @@
+DataRes at UCLA (Topic sources)
+https://ucladatares.medium.com/
+
+
+TickTok
+Datasets
+https://github.com/ivantran96/TikTok_famous/tree/main/Datasets
+https://towardsdatascience.com/how-to-collect-data-from-tiktok-tutorial-ab848b40d191
+
+analytics
+https://github.com/datares/TikTok_Famous
+
+architect
+https://towardsdatascience.com/why-tiktok-made-its-user-so-obsessive-the-ai-algorithm-that-got-you-hooked-7895bb1ab423
+
+Spotify Trends Analysis
+https://ucladatares.medium.com/spotify-trends-analysis-129c8a31cf04
+https://github.com/datares/TeamPink
+Dataset : 160k tracks dataset from Kaggle
+
+Clickbaits
+
+https://arxiv.org/pdf/2009.09945.pdf
+https://github.com/WenjieWWJ/Clickbait
+https://towardsdatascience.com/is-this-headline-clickbait-86d27dc9b389
+https://github.com/AlisonSalerno/clickbait_detector
+
+
